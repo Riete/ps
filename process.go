@@ -1,14 +1,15 @@
 package ps
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/prometheus/procfs"
 	"github.com/riete/convert/str"
 
 	"github.com/shirou/gopsutil/v3/net"
@@ -17,147 +18,138 @@ import (
 )
 
 type ProcessStat struct {
-	User                        string  `json:"user"`
-	Pid                         int32   `json:"pid"`
-	Ppid                        int32   `json:"ppid"`
-	Status                      string  `json:"status"`
-	CmdLine                     string  `json:"cmd_line"`
-	Cwd                         string  `json:"cwd"`
-	CreateTime                  int64   `json:"create_time"`
-	RssBytes                    uint64  `json:"rss_bytes"`
-	CpuPercent                  float64 `json:"cpu_percent"`
-	Nice                        int32   `json:"nice"`
-	MemoryPercent               float32 `json:"memory_percent"`
-	Fds                         int32   `json:"fds"`
-	Threads                     int32   `json:"threads"`
-	VoluntaryContextSwitches    int64   `json:"voluntary_context_switches"`
-	NonVoluntaryContextSwitches int64   `json:"non_voluntary_context_switches"`
-	process                     *process.Process
+	User       string `json:"user"`
+	Pid        int32  `json:"pid"`
+	Ppid       int32  `json:"ppid"`
+	Status     string `json:"status"`
+	CmdLine    string `json:"cmd_line"`
+	Cwd        string `json:"cwd"`
+	CreateTime int64  `json:"create_time"`
+	Nice       int32  `json:"nice"`
+	process    *process.Process
 }
 
-func (p ProcessStat) ToString() string {
-	b, _ := json.Marshal(p)
+func (s ProcessStat) ToString() string {
+	b, _ := json.Marshal(s)
 	return str.FromBytes(b)
 }
 
-func (p *ProcessStat) user() error {
+func (s *ProcessStat) user() error {
 	var err error
-	p.User, err = p.process.Username()
+	s.User, err = s.process.Username()
 	if err != nil {
-		uids, _ := p.process.Uids()
+		uids, _ := s.process.Uids()
 		if len(uids) > 0 {
-			p.User = fmt.Sprintf("%d", uids[0])
+			s.User = fmt.Sprintf("%d", uids[0])
 		}
 	}
 	return nil
 }
 
-func (p *ProcessStat) ppid() error {
+func (s *ProcessStat) ppid() error {
 	var err error
-	p.Ppid, err = p.process.Ppid()
+	s.Ppid, err = s.process.Ppid()
 	return err
 }
 
-func (p *ProcessStat) status() error {
-	status, err := p.process.Status()
-	p.Status = strings.Join(status, ",")
+func (s *ProcessStat) status() error {
+	status, err := s.process.Status()
+	s.Status = strings.Join(status, ",")
 	return err
 }
 
-func (p *ProcessStat) cmdLine() error {
+func (s *ProcessStat) cmdLine() error {
 	var err error
-	p.CmdLine, err = p.process.Cmdline()
+	s.CmdLine, err = s.process.Cmdline()
 	return err
 }
 
-func (p *ProcessStat) cwd() error {
+func (s *ProcessStat) cwd() error {
 	var err error
-	p.Cwd, err = p.process.Cwd()
+	s.Cwd, err = s.process.Cwd()
 	return err
 }
 
-func (p *ProcessStat) createTime() error {
+func (s *ProcessStat) createTime() error {
 	var err error
-	p.CreateTime, err = p.process.CreateTime()
+	s.CreateTime, err = s.process.CreateTime()
 	return err
 }
 
-func (p *ProcessStat) rss() error {
-	memory, err := p.process.MemoryInfo()
+func (s *ProcessStat) nice() error {
+	var err error
+	s.Nice, err = s.process.Nice()
+	return err
+}
+
+func (s *ProcessStat) RssBytes() (uint64, error) {
+	memory, err := s.process.MemoryInfo()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	p.RssBytes = memory.RSS
-	return nil
+	return memory.RSS, nil
 }
 
-func (p *ProcessStat) CpuPercentCurrent(interval time.Duration) (float64, error) {
-	percent, err := p.process.Percent(interval)
+func (s *ProcessStat) CpuPercent(interval time.Duration) (float64, error) {
+	percent, err := s.process.Percent(interval)
 	return percent, err
 }
 
-func (p *ProcessStat) cpuPercent() error {
-	var err error
-	p.CpuPercent, err = p.process.CPUPercent()
-	return err
+func (s *ProcessStat) MemoryPercent() (float32, error) {
+	return s.process.MemoryPercent()
 }
 
-func (p *ProcessStat) nice() error {
-	var err error
-	p.Nice, err = p.process.Nice()
-	return err
+func (s *ProcessStat) NumFDs() (int32, error) {
+	return s.process.NumFDs()
 }
 
-func (p *ProcessStat) memoryPercent() error {
-	var err error
-	p.MemoryPercent, err = p.process.MemoryPercent()
-	return err
+func (s *ProcessStat) NumThreads() (int32, error) {
+	return s.process.NumThreads()
 }
 
-func (p *ProcessStat) numFds() error {
-	var err error
-	p.Fds, err = p.process.NumFDs()
-	return err
-}
-
-func (p *ProcessStat) numThreads() error {
-	var err error
-	p.Threads, err = p.process.NumThreads()
-	return err
-}
-
-func (p *ProcessStat) numContextSwitches() error {
-	cs, err := p.process.NumCtxSwitches()
+func (s *ProcessStat) NumContextSwitches() (voluntary, involuntary int64, err error) {
+	var cs *process.NumCtxSwitchesStat
+	cs, err = s.process.NumCtxSwitches()
 	if err != nil {
-		return err
+		return
 	}
-	p.VoluntaryContextSwitches = cs.Voluntary
-	p.NonVoluntaryContextSwitches = cs.Involuntary
-	return nil
+	voluntary = cs.Voluntary
+	involuntary = cs.Involuntary
+	return
 }
 
-func (p *ProcessStat) Fill() error {
+func (s *ProcessStat) NetTraffic() (in, out float64, err error) {
+	var p procfs.Proc
+	p, err = procfs.NewProc(int(s.Pid))
+	if err != nil {
+		return
+	}
+	var netstat procfs.ProcNetstat
+	if netstat, err = p.Netstat(); err == nil {
+		if netstat.IpExt.InOctets != nil {
+			in = *netstat.IpExt.InOctets
+		}
+		if netstat.IpExt.OutOctets != nil {
+			out = *netstat.IpExt.OutOctets
+		}
+	}
+	return
+}
+
+func (s *ProcessStat) Fill() error {
 	hf := func(f func() error, err error) error {
 		if err != nil {
 			return err
 		}
 		return f()
 	}
-	err := p.ppid()
-	err = hf(p.user, err)
-	err = hf(p.status, err)
-	err = hf(p.cmdLine, err)
-	err = hf(p.cwd, err)
-	err = hf(p.createTime, err)
-	err = hf(p.rss, err)
-	err = hf(p.cpuPercent, err)
-	err = hf(p.nice, err)
-	err = hf(p.memoryPercent, err)
-	if runtime.GOOS != "darwin" {
-		err = hf(p.numFds, err)
-		err = hf(p.numThreads, err)
-		err = hf(p.numContextSwitches, err)
-	}
+	err := s.ppid()
+	err = hf(s.user, err)
+	err = hf(s.status, err)
+	err = hf(s.cmdLine, err)
+	err = hf(s.cwd, err)
+	err = hf(s.createTime, err)
+	err = hf(s.nice, err)
 	return err
 }
 
@@ -233,75 +225,56 @@ func ProcessNetConnections(pid int32) (NetTcpConnectionStats, error) {
 }
 
 type TopProcess struct {
-	User              string  `json:"user"`
-	Pid               int32   `json:"pid"`
-	Ppid              int32   `json:"ppid"`
-	Status            string  `json:"status"`
-	CmdLine           string  `json:"cmd_line"`
-	CpuPercentCurrent float64 `json:"cpu_percent_current"`
-	RssBytes          uint64  `json:"rss_bytes"`
-	process           *process.Process
+	User       string  `json:"user"`
+	Pid        int32   `json:"pid"`
+	Ppid       int32   `json:"ppid"`
+	Status     string  `json:"status"`
+	CmdLine    string  `json:"cmd_line"`
+	CpuPercent float64 `json:"cpu_percent"`
+	RssBytes   uint64  `json:"rss_bytes"`
+	s          *ProcessStat
 }
 
-func (t *TopProcess) cpuPercentCurrent(interval time.Duration) {
-	t.CpuPercentCurrent, _ = t.process.Percent(interval)
-}
-
-type CpuTopProcesses []*TopProcess
-
-func (c CpuTopProcesses) ToString() string {
-	b, _ := json.Marshal(c)
+func (t TopProcess) ToString() string {
+	b, _ := json.Marshal(t)
 	return str.FromBytes(b)
 }
 
-func (c CpuTopProcesses) Len() int {
-	return len(c)
-}
+type TopProcesses []*TopProcess
 
-func (c CpuTopProcesses) Less(i, j int) bool {
-	return c[i].CpuPercentCurrent > c[j].CpuPercentCurrent
-}
-
-func (c CpuTopProcesses) Swap(i, j int) {
-	c[i], c[j] = c[j], c[i]
-}
-
-type MemoryTopProcesses []*TopProcess
-
-func (m MemoryTopProcesses) ToString() string {
-	b, _ := json.Marshal(m)
+func (t TopProcesses) ToString() string {
+	b, _ := json.Marshal(t)
 	return str.FromBytes(b)
 }
 
-func (m MemoryTopProcesses) Len() int {
-	return len(m)
+type SortFunc func(*TopProcess, *TopProcess) int
+
+func SortByCpu(i, j *TopProcess) int {
+	return -cmp.Compare(i.CpuPercent, j.CpuPercent)
 }
 
-func (m MemoryTopProcesses) Less(i, j int) bool {
-	return m[i].RssBytes > m[j].RssBytes
+func SortByMemory(i, j *TopProcess) int {
+	return -cmp.Compare(i.RssBytes, j.RssBytes)
 }
 
-func (m MemoryTopProcesses) Swap(i, j int) {
-	m[i], m[j] = m[j], m[i]
-}
-
-func MemoryTopN(n int) (MemoryTopProcesses, error) {
+func TopNProcess(n int, f SortFunc) (TopProcesses, error) {
 	p, err := Processes()
 	if err != nil {
 		return nil, err
 	}
-	var top MemoryTopProcesses
-	for _, i := range p {
+	var top TopProcesses
+	for _, s := range p {
+		rssBytes, _ := s.RssBytes()
 		top = append(
 			top,
 			&TopProcess{
-				User:     i.User,
-				Pid:      i.Pid,
-				Ppid:     i.Ppid,
-				Status:   i.Status,
-				CmdLine:  i.CmdLine,
-				RssBytes: i.RssBytes,
-				process:  i.process,
+				User:     s.User,
+				Pid:      s.Pid,
+				Ppid:     s.Ppid,
+				Status:   s.Status,
+				CmdLine:  s.CmdLine,
+				RssBytes: rssBytes,
+				s:        s,
 			},
 		)
 	}
@@ -309,49 +282,13 @@ func MemoryTopN(n int) (MemoryTopProcesses, error) {
 	wg.Add(len(top))
 	for _, i := range top {
 		go func(p *TopProcess) {
-			p.cpuPercentCurrent(time.Second)
+			p.CpuPercent, _ = p.s.CpuPercent(time.Second)
 			wg.Done()
 		}(i)
 	}
 	wg.Wait()
-	sort.Sort(top)
+	slices.SortStableFunc(top, f)
 	if n >= len(top) {
-		return top, nil
-	}
-	return top[0:n], nil
-}
-
-func CpuTopN(interval time.Duration, n int) (CpuTopProcesses, error) {
-	p, err := Processes()
-	if err != nil {
-		return nil, err
-	}
-	var top CpuTopProcesses
-	for _, i := range p {
-		top = append(
-			top,
-			&TopProcess{
-				User:     i.User,
-				Pid:      i.Pid,
-				Ppid:     i.Ppid,
-				Status:   i.Status,
-				CmdLine:  i.CmdLine,
-				RssBytes: i.RssBytes,
-				process:  i.process,
-			},
-		)
-	}
-	wg := sync.WaitGroup{}
-	wg.Add(len(top))
-	for _, i := range top {
-		go func(p *TopProcess) {
-			p.cpuPercentCurrent(interval)
-			wg.Done()
-		}(i)
-	}
-	wg.Wait()
-	sort.Sort(top)
-	if n > len(top) {
 		return top, nil
 	}
 	return top[0:n], nil

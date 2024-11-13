@@ -102,11 +102,3 @@ func CpuTime() (CpuTimeStats, error) {
 	)
 	return cpuStat, nil
 }
-
-func CpuCount() (int, error) {
-	c, err := cpu.Info()
-	if err != nil {
-		return 0, err
-	}
-	return len(c), nil
-}

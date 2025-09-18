@@ -7,7 +7,7 @@ import (
 
 	"github.com/riete/convert/str"
 
-	"github.com/shirou/gopsutil/v3/net"
+	"github.com/shirou/gopsutil/v4/net"
 )
 
 type NetTcpConnectionStat struct {

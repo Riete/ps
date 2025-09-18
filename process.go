@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shirou/gopsutil/v4/net"
+
 	"github.com/prometheus/procfs"
 	"github.com/riete/convert/str"
 
-	"github.com/shirou/gopsutil/v3/net"
-
-	"github.com/shirou/gopsutil/v3/process"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 type ProcessStat struct {
@@ -136,6 +136,22 @@ func (s *ProcessStat) NetTraffic() (in, out float64, err error) {
 	return
 }
 
+func (s *ProcessStat) TcpConnections() (NetTcpConnectionStats, error) {
+	var tcpStat NetTcpConnectionStats
+	connections, err := net.ConnectionsPid("tcp", s.Pid)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range connections {
+		name := fmt.Sprintf("%s:%d->%s:%d", c.Laddr.IP, c.Laddr.Port, c.Raddr.IP, c.Raddr.Port)
+		if c.Status == "LISTEN" {
+			name = fmt.Sprintf("%s:%d", c.Laddr.IP, c.Laddr.Port)
+		}
+		tcpStat = append(tcpStat, NetTcpConnectionStat{Fd: c.Fd, Node: "TCP", Name: name, Status: c.Status, Pid: c.Pid})
+	}
+	return tcpStat, nil
+}
+
 func (s *ProcessStat) Fill() error {
 	hf := func(f func() error, err error) error {
 		if err != nil {
@@ -225,14 +241,15 @@ func ProcessNetConnections(pid int32) (NetTcpConnectionStats, error) {
 }
 
 type TopProcess struct {
-	User       string  `json:"user"`
-	Pid        int32   `json:"pid"`
-	Ppid       int32   `json:"ppid"`
-	Status     string  `json:"status"`
-	CmdLine    string  `json:"cmd_line"`
-	CpuPercent float64 `json:"cpu_percent"`
-	RssBytes   uint64  `json:"rss_bytes"`
-	s          *ProcessStat
+	User           string  `json:"user"`
+	Pid            int32   `json:"pid"`
+	Ppid           int32   `json:"ppid"`
+	Status         string  `json:"status"`
+	CmdLine        string  `json:"cmd_line"`
+	CpuPercent     float64 `json:"cpu_percent"`
+	RssBytes       uint64  `json:"rss_bytes"`
+	TcpConnections uint64  `json:"tcp_connections"`
+	s              *ProcessStat
 }
 
 func (t TopProcess) ToString() string {
@@ -255,6 +272,10 @@ func SortByCpu(i, j *TopProcess) int {
 
 func SortByMemory(i, j *TopProcess) int {
 	return -cmp.Compare(i.RssBytes, j.RssBytes)
+}
+
+func SortByTcpConnections(i, j *TopProcess) int {
+	return -cmp.Compare(i.TcpConnections, j.TcpConnections)
 }
 
 func TopNProcess(n int, f SortFunc) (TopProcesses, error) {
@@ -282,6 +303,8 @@ func TopNProcess(n int, f SortFunc) (TopProcesses, error) {
 	wg.Add(len(top))
 	for _, i := range top {
 		go func(p *TopProcess) {
+			tcpConnections, _ := p.s.TcpConnections()
+			p.TcpConnections = uint64(len(tcpConnections))
 			p.CpuPercent, _ = p.s.CpuPercent(time.Second)
 			wg.Done()
 		}(i)

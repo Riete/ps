@@ -5,7 +5,7 @@ import (
 
 	"github.com/riete/convert/str"
 
-	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/shirou/gopsutil/v4/mem"
 )
 
 type VirtualMemoryStat struct {

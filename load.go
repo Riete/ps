@@ -5,7 +5,7 @@ import (
 
 	"github.com/riete/convert/str"
 
-	"github.com/shirou/gopsutil/v3/load"
+	"github.com/shirou/gopsutil/v4/load"
 )
 
 type LoadStat struct {
